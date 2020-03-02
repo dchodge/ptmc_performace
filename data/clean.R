@@ -1,9 +1,9 @@
 library('tidyverse')
 
-clean_data <- function(age_lim)
+clean_data <- function(age_c)
 {
-    age_lim <- c(age_lim, 100)
-    raw <- read.csv("./data/rsv_output_samples.csv", skip = 1, stringsAsFactors = FALSE)
+    age_lim <- c(age_c, 100)
+    raw <- read.csv("./rsv_output_samples.csv", skip = 1, stringsAsFactors = FALSE)
     lol <- slice(raw[421,], 1) #Example of an empty row
     age_g <- c(0:11/12, 1:5, 10, 15, 25, 35, 45, 55, 65, 75)
     age_no <- length(age_g)
@@ -17,7 +17,6 @@ clean_data <- function(age_lim)
       }
     }
     pos_empty <- append(pos_empty, nrow(raw))
-
     age_col <- c()
     for (i in 1:age_no)
     {
@@ -47,7 +46,6 @@ clean_data <- function(age_lim)
     clean_edit_t <- clean_edit
     clean_edit_age <- clean_edit
 
-
     #Clean data so that only 52 weeks (26-25) of each year are included
     for(a in 1:age_no)
     {
@@ -60,15 +58,20 @@ clean_data <- function(age_lim)
         }
       }
     }
-
+    
+    clean_edit$Week <- sapply(c(26:52, rep(1:52,6), 1:25), function(x) toString(x)) %>% factor(levels = sapply(1:52, function(x) toString(x)))
+    clean_edit$Year <- sapply(c(rep(2010,27), sapply(2011:2016, function(x) rep(x,52)), rep(2017,25)), function(x) toString(x))
+    
+    
     #Edit the table to account for the grouping
-    for (a in 1:length(age_lim))
+    for (a in 1:(length(age_lim)-1))
     {
-      clean_edit_t <- clean_edit %>% filter((age_lim[a]<=Age.group)&(Age.group<age_lim[a+1]))
+      clean_edit_t <- clean_edit %>% filter((Age.group>=age_lim[a])&(Age.group<age_lim[a+1]))
       clean_edit_t <- summarise(group_by(clean_edit_t, Year, Week),
                   RSV.Negative=sum(RSV.Negative),
                   RSV.Positive=sum(RSV.Positive)
         )
+      
       clean_edit_t$Age.group <- rep(a, nrow(clean_edit_t))
       clean_edit_age <- bind_rows(clean_edit_age, clean_edit_t)
     }
@@ -89,18 +92,13 @@ clean_data <- function(age_lim)
 
     s_edit <-c()
     # Make the scalar programme
-    for (l in 1:14)
+    for (l in 1:((length(age_lim)-1)*7))
     {
       s_edit <- append(s_edit, clean_edit_age$RSV.Positive[(52*(l-1)+1):(52*l)]*s[l])
     }
     clean_edit_age$RSV.Positive.S <- s_edit
 
-    ggplot(data=clean_edit_age, aes(x=c(1:(52*7*2)), y=RSV.Positive.S, group=1)) +
-      geom_line()
-
-    clean_spread <- clean_edit_age %>% select(Year, Week, Age.group, RSV.Positive.S) %>% spread (Age.group, RSV.Positive.S) %>% select(`1`,`2`)
+    clean_spread <- clean_edit_age %>% select(Year, Week, Age.group, RSV.Positive.S)# %>% spread(Age.group, RSV.Positive.S, drop = TRUE) #%>% select(sapply(1:25, function(x) toString(x)))
+    clean_spread$Week <- sapply(clean_spread$Week, as.numeric) 
+    clean_spread <- clean_spread %>% spread(Age.group, RSV.Positive.S, drop = TRUE) %>% select(sapply(1:(length(age_lim) - 1), function(x) toString(x)))
 }
-
-age_c = c(0,2)
-smallage <- lean_data(age_c)
-write.table(smallage, file="./Dropbox/academia/PhD/calibration_paper/model/data/RSV_RSDM_pos_trim.txt")
