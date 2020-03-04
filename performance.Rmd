@@ -8,8 +8,8 @@ output: pdf_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-# 1. Setup 
 
+# 1. Setup 
 # 1.1 Import dependencies
 ```{r dependencies}
 
@@ -19,24 +19,27 @@ library("RcppEigen")  # Ditto
 library("coda")  # Ditto
 library("tidyverse")
 library("ptmc")
-library('socialmixr')
 library(gridExtra)
+
+library('socialmixr')
 
 source("./data/clean.R") # this is for cleaning if you wanted to try a different age range 
 no_chains <- 10
 
 ```
 
-1.2 Import data
+1.2 Import data for the epidemic model
 ```{r download the data}
 
 age_lim <- c(0, 2) 
+
+# Birth rate per days (mu) and the population of England (2017 ONS)
 dem = list(
   mu = 1860.564,
   pop = 58744600
 )
-# Do POLYMOD data
 
+#  POLYMOD data for contact matrices
 data(polymod) # Get the polymod
 poly <- contact_matrix(polymod, countries = "United Kingdom", age.limits = age_lim, symmetric = TRUE)
 
@@ -44,6 +47,7 @@ poly <- contact_matrix(polymod, countries = "United Kingdom", age.limits = age_l
 #obsdata <- clean_data(age_lim) can clean data according to any age stratification
 obsdata <- read.table("./data/RSV_RSDM_pos_trim.txt")
 
+# List of data
 data = list(
   obsdata=obsdata,
   poly=poly,
@@ -51,13 +55,14 @@ data = list(
   agegroup=age_lim
 )
 
-# import the log likelihood function
+# Import the log likelihood function
 sourceCpp("./src/ll_func_c.cpp") #ensure c+11 is enabled
 
 ```
+
 # 2. Define the models 
 # 2.1 Define model for MCMC algorithms in via  Bayesian Tools package
-```{r}
+```{r outline the model for BT}
 
 # Create parameters with upper, lower prior (upper, lower prior)
 Pars <- data.frame(matrix(vector(), 13, 3,
@@ -71,7 +76,7 @@ rownames(Pars) <- c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1",
 # Get the log likelihood
 llikelihood <- function(params){
   ll <- eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
-  if (ll == -Inf)
+  if (ll == -Inf) # This is to stop infinite log likelihoods gettings stuck
     ll = -1000000
   
   return(ll)
@@ -82,7 +87,7 @@ density = function(params){
   p1 = 0
   for (i in 1:13)
   {
-    p1 = p1 + dlogis(params[i], location = 0, scale = 1, log = FALSE)
+    p1 = p1 + dlogis(params[i], location = 0, scale = 1, log = TRUE)
   }
 return(p1)
 }
@@ -100,7 +105,7 @@ bayesianSetup <- createBayesianSetup(llikelihood, prior, names = rownames(Pars))
 
 2.2 Define model for PTMC algorithm via the ptmc package
 
-```{r define the model}
+```{r outline the model for PTMC}
 
 model <- list(
 
@@ -126,14 +131,13 @@ model <- list(
   eval_ll = function(data, params) {
 
     eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
-    
   }
 )
 
 ```
 
-# 3 Run all the algorithms 
-
+# 3 Run the algorithms
+# 3.1 Run the Bayesian Tools package
 ```{r}
 
 # Standard (non-adaptive) Metropolis Hastings
@@ -151,6 +155,7 @@ outDezs <- runMCMC(bayesianSetup = bayesianSetup, sampler = "DEzs", settings = s
 
 ```
 
+# Run the ptmc package
 ```{r}
 
 settingsPT <-  list(
@@ -172,6 +177,8 @@ settingsPT <-  list(
 outPT <- ptmc_func(model, data, settingsPT)
 
 ```
+
+
 # 4. Plots to understand convergence
 #4.1 Likelihood 
 ```{r}
@@ -186,13 +193,15 @@ lpMH_conv <- lpMH %>% filter(sample_no>round(l/2))
 
 p1<- ggplot(lpMH, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal() +  scale_y_continuous(name="Log(-LogLikelihoood)")
 
 p2<- ggplot(lpMH_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal() +  scale_y_continuous(name="Log(-LogLikelihoood)", limits=c(8.05, 8.1))
 
 p <- grid.arrange(p1, p2,  top="Normal Metropolis-Hastings")
+
+ggsave("./figs/llogMH.pdf", p)
 
 ```
 
@@ -207,14 +216,17 @@ lpAM_conv <- lpAM %>% filter(sample_no>round(l/2))
 
 p1 <- ggplot(lpAM, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal()  +  scale_y_continuous(name="Log(-LogLikelihoood)")
 
 p2 <- ggplot(lpAM_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal() +  scale_y_continuous(name="Log(-LogLikelihoood)", limits=c(8.05, 8.1))
 
 
-grid.arrange(p1, p2,  top="Adaptive Metropolis-Hastings")
+p <- grid.arrange(p1, p2,  top="Adaptive Metropolis-Hastings")
+
+ggsave("./figs/llogAM.pdf", p)
+
 
 ```
 
@@ -230,13 +242,15 @@ lpDezs_conv <- lpDezs %>% filter(sample_no>round(l/2))
 
 p1 <- ggplot(lpDezs, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal()  +  scale_y_continuous(name="Log(-LogLikelihoood)")
 
 p2 <- ggplot(lpDezs_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal() +  scale_y_continuous(name="Log(-LogLikelihoood)", limits=c(8.05, 8.1))
 
-grid.arrange(p1, p2,  top="Differential Evolaution with snooker update")
+p <- grid.arrange(p1, p2,  top="Differential Evolaution with snooker update")
+
+ggsave("./figs/llogDE.pdf", p)
 
 
 ```
@@ -245,24 +259,26 @@ grid.arrange(p1, p2,  top="Differential Evolaution with snooker update")
 ```{r}
 
 
-lpPT_conv <- outPT$lpost %>% filter(sample_no>round(15000/2))
+lpPT_conv <- outPT$lpost %>% filter(sample_no>round(10000/2))
 
 p1 <- ggplot(outPT$lpost, aes(x = sample_no, y = log(-lpost))) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal()  +  scale_y_continuous(name="Log(-LogLikelihoood)")
 
 p2 <- ggplot(lpPT_conv, aes(x = sample_no, y = log(-lpost))) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal()
+  theme_minimal() +  scale_y_continuous(name="Log(-LogLikelihoood)", limits=c(8.05, 8.1))
+ 
+p <- grid.arrange(p1, p2,  top="Parallel Tempering")
 
-grid.arrange(p1, p2,  top="Parallel Tempering")
+ggsave("./figs/llogPT.pdf", p)
 
 
 ```
 
 ```{r}
 
-lpAll <- bind_rows(lpMH, lpAM, lpDezs, lpPT)
+lpAll <- bind_rows(lpMH, lpAM, lpDezs,  outPT$lpost)
 
 lpAll_conv <- lpAll %>% filter(sample_no>round(l/2))
 
@@ -279,18 +295,15 @@ grid.arrange(p1, p2,  top="Parallel Tempering")
 ```
 
 
-# 4. Plotting convergence 
+
 ```{r}
 
-ggplot(outPT$lpost, aes(x = sample_no, y = loglike)) + 
-  geom_line(aes(color = mcmc), size = 0.2, alpha=0.8) +
-  theme_minimal()
+ggsave("./figs/convPT.pdf", gelman.plot(outPT$mcmc))
 
 ```
 
-
 ```{r}
 
-gelman.diag(outPT$mcmc)
+
 
 ```
