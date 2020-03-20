@@ -7,11 +7,14 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+install.packages("profvis")
+
 ```
 
 # 1. Setup 
 # 1.1 Import dependencies
 ```{r dependencies}
+
 
 library(BayesianTools)
 library("Rcpp")       # For c++ intergration
@@ -21,7 +24,7 @@ library("tidyverse")
 library("ptmc")
 library(gridExtra)
 library('socialmixr')
-
+library(profvis)
 no_chains <- 10
 
 ```
@@ -85,16 +88,16 @@ density = function(params){
   p1 = 0
   for (i in 1:13)
   {
-    p1 = p1 + dlogis(params[i], location = 0, scale = 1, log = TRUE)
+    p1 <- p1 + dlogis(params[i], location = 0, scale = 1, log = TRUE)
   }
-return(p1)
+  return(p1)
 }
 
 sampler = function(n=1){
-  s1 = rlogis(13, location = 0, scale = 1)
+  s1 <- rlogis(13, location = 0, scale = 1)
   return(s1)
 }
-prior <- createPrior(density = density, sampler = sampler,lower = rep(-10, 13), upper = rep(10, 13))
+prior <- createPrior(density = density, sampler = sampler,lower = rep(-1000, 13), upper = rep(1000, 13))
 
 # Create Bayesian Setup, this can be used in the Parallel tempering function
 bayesianSetup <- createBayesianSetup(llikelihood, prior, names = rownames(Pars))
@@ -127,7 +130,6 @@ model <- list(
 
   # Evaluate the log likelihood
   eval_ll = function(data, params) {
-
     eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
   }
 )
@@ -195,7 +197,7 @@ p1<- ggplot(lpMH, aes(x = sample_no, y = loglike)) +
 
 p2<- ggplot(lpMH_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.15, alpha=0.8) +
-  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.06, 8.08)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
+  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.11, 8.13)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
 
 p <- grid.arrange(p1, p2,  top="Standard Metropolis-Hastings")
 
@@ -218,7 +220,7 @@ p1 <- ggplot(lpAM, aes(x = sample_no, y = loglike)) +
 
 p2 <- ggplot(lpAM_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) + 
-  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.06, 8.08)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
+  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.11, 8.13)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
 
 
 p <- grid.arrange(p1, p2,  top="Adaptive Metropolis-Hastings")
@@ -244,7 +246,7 @@ p1 <- ggplot(lpDezs, aes(x = sample_no, y = loglike)) +
 
 p2 <- ggplot(lpDezs_conv, aes(x = sample_no, y = loglike)) + 
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.06, 8.08)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
+  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.11, 8.13)) + theme(legend.position = "none") + scale_x_continuous(name="Step number")
 
 p <- grid.arrange(p1, p2,  top="Differential Evolution with snooker update")
 
@@ -265,7 +267,7 @@ p1 <- ggplot(outPT$lpost, aes(x = sample_no, y = log(-lpost))) +
 
 p2 <- ggplot(lpPT_conv, aes(x = sample_no, y = log(-lpost))) +
   geom_line(aes(color = chain_no), size = 0.2, alpha=0.8) +
-  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.06, 8.08))  + theme(legend.position = "none") + scale_x_continuous(name="Step number")
+  theme_minimal() +  scale_y_continuous(name="log(-log(p(psi|D)))", limits=c(8.11, 8.13))  + theme(legend.position = "none") + scale_x_continuous(name="Step number")
  
 p <- grid.arrange(p1, p2,  top="Parallel Tempering")
 
@@ -274,6 +276,11 @@ ggsave("../ms/figs/llogPT.pdf", p)
 
 ```
 
+```{r}
+lp2 <- lpPT_conv$lpost
+
+lol <- lol[lol!=1]mean(lol)
+```
 
 ```{r}
 

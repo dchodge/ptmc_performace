@@ -166,6 +166,8 @@ public:
       mu_t = dem["mu"];
       int tot = dem["pop"];
       
+      eta.push_back(0);
+      
       for (int i = 1; i < A; i++)
       {
           eta.push_back( 1.0/(365.0*(age_lim[i] - age_lim[i-1])) );
@@ -311,7 +313,6 @@ double eval_ll_cpp(DataFrame data, NumericMatrix poly, List dem, NumericVector a
   inc_tot = VectorXd::Zero(A);
   
   
-        
   ODE_desc ODE_desc_inst(poly, dem, age_lim, popsize, pars);
   num_vec x0 = model::init_cond(dem, age_lim, popsize, pars);
 
