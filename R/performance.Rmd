@@ -7,14 +7,13 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-install.packages("profvis")
+#install.packages("profvis")
 
 ```
 
 # 1. Setup 
 # 1.1 Import dependencies
 ```{r dependencies}
-
 
 library(BayesianTools)
 library("Rcpp")       # For c++ intergration
@@ -110,16 +109,16 @@ bayesianSetup <- createBayesianSetup(llikelihood, prior, names = rownames(Pars))
 
 model <- list(
 
-  par_names =  c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1", "ep1", "ep2", "alpha"),
+  namesOfParameters =  c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1", "ep1", "ep2", "alpha"),
 
   # Generate the initial step of Markov chain
-  gen_init = function() {
+  samplePriorDistributions = function() {
       s1 <- rlogis(13, location = 0, scale = 1)
       s1
   },
 
   # Evaluate the log prior
-  eval_lpr = function(params) {
+  evaluateLogPrior = function(params) {
     p1 = 0
     for (i in 1:13)
     {
@@ -129,7 +128,7 @@ model <- list(
   },
 
   # Evaluate the log likelihood
-  eval_ll = function(data, params) {
+  evaluateLogLikelihood = function(data, params) {
     eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
   }
 )
@@ -159,19 +158,19 @@ outDezs <- runMCMC(bayesianSetup = bayesianSetup, sampler = "DEzs", settings = s
 ```{r}
 
 settingsPT <-  list(
-  nrChains = 10,
-  M = 10,
+  numberChainRuns = 10,
+  numberTempChains = 10,
   iterations = 100000, 
-  burn = 1,
+  burninPosterior = 1,
   thin = 10,
   consoleUpdates = 100,
-  P = 13,              
-  adap_Cov = TRUE,
-  adap_Cov_freq = 1,
-  adap_Cov_burn = 10000,
-  adap_Temp = TRUE,
-  adap_Temp_freq = 1,
-  Debug = FALSE
+  numberFittedPar = 13,        
+  onAdaptiveCov = TRUE,
+  updatesAdaptiveCov = 1,
+  burninAdaptiveCov = 10000,
+  onAdaptiveTemp = TRUE,
+  updatesAdaptiveTemp = 1,
+  onDebug = FALSE
 )
 
 outPT <- ptmc_func(model, data, settingsPT)
