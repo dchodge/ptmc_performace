@@ -276,9 +276,20 @@ ggsave("../ms/figs/llogPT.pdf", p)
 ```
 
 ```{r}
-lp2 <- lpPT_conv$lpost
+acceptance <- outPT$acc %>% filter(chain_no==1)
 
-lol <- lol[lol!=1]mean(lol)
+acceptancerateAv <- c(mean(sapply(1:10, function(x) outMH[[x]]$acceptanceRate)),
+mean(sapply(1:10, function(x) outAM[[x]]$acceptanceRate)),
+mean(sapply(1:10, function(x) mean(1-rejectionRate(outDezs[[x]]$codaChain[[1]])))),
+mean(acceptance$'acceptance rate'[1:9999]))
+
+dfAcceptance <- data.frame('Average acceptance rate'=acceptancerateAv, mcmcSampler=factor(c("Normal","Adaptive","Differential Evolution","Parallel Tempering"),  c("Normal","Adaptive","Differential Evolution","Parallel Tempering")))
+
+p <- ggplot(dfAcceptance, aes(x = mcmcSampler, y = Average.acceptance.rate)) +
+        geom_bar(stat="identity")
+
+ggsave("../ms/figs/acc.pdf", p)
+
 ```
 
 ```{r}
