@@ -6,17 +6,14 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-#install.packages("profvis")
-
+knitr::opts_chunk$set(echo = TRUE, fig.height=8)
 ```
 
 # 1. Setup 
 # 1.1 Import dependencies
 ```{r dependencies}
-
+library(Rcpp)       # For c++ intergration
 library(BayesianTools)
-library("Rcpp")       # For c++ intergration
 library("RcppEigen")  # Ditto
 library("coda")  # Ditto
 library("tidyverse")
@@ -24,6 +21,7 @@ library("ptmc")
 library(gridExtra)
 library('socialmixr')
 library(profvis)
+library(reshape2)
 no_chains <- 10
 
 ```
@@ -55,8 +53,11 @@ data = list(
   agegroup=age_lim
 )
 
-# Import the log likelihood function
-sourceCpp("./src/ll_func_c.cpp") #ensure c+11 is enabled
+```
+
+```{r}
+
+sourceCpp("./src/RcppModule.cpp")
 
 ```
 
@@ -75,7 +76,7 @@ rownames(Pars) <- c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1",
 
 # Get the log likelihood
 llikelihood <- function(params){
-  ll <- eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
+  ll <- evaluateLogLikelihood(data, params)
   if (ll == -Inf) # This is to stop infinite log likelihoods gettings stuck
     ll = -1000000
   
@@ -129,7 +130,8 @@ model <- list(
 
   # Evaluate the log likelihood
   evaluateLogLikelihood = function(data, params) {
-    eval_ll_cpp(data$obsdata, data$poly$matrix, data$dem, data$agegroup, params)
+    ll <- evaluateLogLikelihood(data, params)
+    ll
   }
 )
 
@@ -275,6 +277,8 @@ ggsave("../ms/figs/llogPT.pdf", p)
 
 ```
 
+# Plot acceptance rate
+
 ```{r}
 acceptance <- outPT$acc %>% filter(chain_no==1)
 
@@ -291,6 +295,117 @@ p <- ggplot(dfAcceptance, aes(x = mcmcSampler, y = Average.acceptance.rate)) +
 ggsave("../ms/figs/acc.pdf", p)
 
 ```
+ 
+Comparison of converged posteriors 
+ 
+```{r}
+logLogLikelihoodConvergeBoundary <- 8.115
+
+# Filter for MH and AM 
+getConvergedChains <- function(fullDataFrame, convergedDataFrame, nameOfSample){
+  chainNumberConverged <- as.numeric(convergedDataFrame %>% filter(sample_no==convergedDataFrame[1,3]) %>% filter(loglike < logLogLikelihoodConvergeBoundary) %>% pull(chain_no))
+  for (i in 1:length(chainNumberConverged))
+    colnames(fullDataFrame[[chainNumberConverged[i]]]$chain) <- c(namesOfParameters, "LP", "LL", "LPr")
+  
+  convergedchains <- lapply(chainNumberConverged, function(x) melt(fullDataFrame[[x]]$chain[50001:99999,], c("sampleNo","parameter")))  
+  convergedchains <- do.call(rbind, convergedchains)
+  convergedchains <- cbind(convergedchains, sampler=rep(nameOfSample, nrow(convergedchains)))
+  convergedchains
+}
+
+filterMH <- getConvergedChains(outMH, lpMH_conv, "MH")
+filterAM <- getConvergedChains(outAM, lpAM_conv, "AM")
+
+# Filter for Dezs
+chainNumberConvergedDezs <- as.numeric(lpDezs_conv %>% filter(sample_no==lpDezs_conv[1,3]) %>% filter(loglike < logLogLikelihoodConvergeBoundary) %>% pull(chain_no))
+convergedchains <- lapply(chainNumberConvergedDezs, function(x) melt(outDezs[[x]]$chain[[1]][lpDezs_conv[1,3]:33333,], c("sampleNo","parameter")))  
+convergedchains <- do.call(rbind, convergedchains)
+filterDezs <- cbind(convergedchains, sampler=rep("DEzs", nrow(convergedchains)))
+
+
+# Filter for PT
+chainNumberConvergedPT <- as.numeric(lpPT_conv %>% filter(sample_no==lpPT_conv[1,3]) %>% filter(log(-lpost) < logLogLikelihoodConvergeBoundary) %>% pull(chain_no))
+convergedchains <- lapply(chainNumberConvergedPT, function(x) melt(outPT$mcmc[[x]][lpPT_conv[1,3]:9999,], c("sampleNo","parameter")))  
+convergedchains <- do.call(rbind, convergedchains)
+filterPT <- cbind(convergedchains, sampler=rep("PT", nrow(convergedchains)))
+
+filter <- filter(do.call(rbind, list(filterMH, filterAM, filterDezs, filterPT)), parameter %in% namesOfParameters)
+
+```
+
+```{r}
+namesOfParameters =  c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1", "ep1", "ep2", "alpha")
+
+p <- list()
+
+for (i in 1:13)
+{
+  p[[i]] <- ggplot(filter(filter, parameter==namesOfParameters[i]), aes(x=value, color=sampler, fill=sampler)) + 
+  geom_density(alpha=0.3) + 
+  scale_color_manual(values=c("#00FF00", "#E69F00", "#56B4E9", "#B8181E")) +
+  scale_fill_manual(values=c("#00FF00", "#E69F00", "#56B4E9", "#B8181E")) +
+  labs(title=paste0("Posterior for ", namesOfParameters[i], sep="") ,x="Value", y = "Density") + 
+    theme(text = element_text(size=14), title=element_text(size=14), legend.title = element_text( size=14), legend.text=element_text(size=14)) + 
+    guides(shape = guide_legend(override.aes = list(size = 0.01)), color = guide_legend(override.aes = list(size = 0.01)))
+}
+
+pp <- grid.arrange(p[[1]], p[[2]], p[[3]], p[[4]], p[[5]], p[[6]], p[[7]], p[[8]], p[[9]], p[[10]], p[[11]], p[[12]], p[[13]], ncol=2)
+ggsave("../ms/figs/comparPost.pdf", pp)
+
+```
+
+```{r}
+
+p <- ggplot(filter, aes(x=value, color=sampler, fill=sampler)) + 
+  geom_density(alpha=0.3) + 
+  scale_color_manual(values=c("#00FF00", "#E69F00", "#56B4E9", "#B8181E")) +
+  scale_fill_manual(values=c("#00FF00", "#E69F00", "#56B4E9", "#B8181E")) +
+  labs(title=paste0("Posterior for ", namesOfParameters[i], sep="") ,x="Value", y = "Density") + 
+    theme(text = element_text(size=5), title=element_text(size=7), legend.title = element_text( size=7), legend.text=element_text(size=7)) + 
+    guides(shape = guide_legend(override.aes = list(size = 0.01)), color = guide_legend(override.aes = list(size = 0.01)))
+
+p + facet_grid(parameter ~ .,  scales="free")
+  
+
+```
+
+```{r}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+````
 
 ```{r}
 
