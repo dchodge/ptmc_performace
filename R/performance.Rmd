@@ -58,8 +58,12 @@ data = list(
 ```{r}
 
 sourceCpp("./src/RcppModule.cpp")
+classEvaluateLogLikelihood <- new(EvaluateLogLikelihood, dem$mu, dem$pop, age_lim)
+classEvaluateLogLikelihood$contactMatrix <- poly$matrix
+classEvaluateLogLikelihood$observedData <- as.matrix(obsdata)
 
 ```
+
 
 # 2. Define the models 
 # 2.1 Define model for MCMC algorithms in via  Bayesian Tools package
@@ -76,7 +80,7 @@ rownames(Pars) <- c("ga0", "om", "a", "b", "phi", "psi", "I1", "I2", "I3", "d1",
 
 # Get the log likelihood
 llikelihood <- function(params){
-  ll <- evaluateLogLikelihood(data, params)
+  ll <-classEvaluateLogLikelihood$evaluateLogLikelihoodCpp(params)
   if (ll == -Inf) # This is to stop infinite log likelihoods gettings stuck
     ll = -1000000
   
@@ -115,7 +119,6 @@ model <- list(
   # Generate the initial step of Markov chain
   samplePriorDistributions = function() {
       s1 <- rlogis(13, location = 0, scale = 1)
-      s1
   },
 
   # Evaluate the log prior
@@ -130,7 +133,7 @@ model <- list(
 
   # Evaluate the log likelihood
   evaluateLogLikelihood = function(data, params) {
-    ll <- evaluateLogLikelihood(data, params)
+    ll <- classEvaluateLogLikelihood$evaluateLogLikelihoodCpp(params)
     ll
   }
 )
@@ -165,7 +168,7 @@ settingsPT <-  list(
   iterations = 100000, 
   burninPosterior = 1,
   thin = 10,
-  consoleUpdates = 100,
+  consoleUpdates = 1,
   numberFittedPar = 13,        
   onAdaptiveCov = TRUE,
   updatesAdaptiveCov = 1,
