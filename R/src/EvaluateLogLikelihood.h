@@ -1,9 +1,3 @@
-//
-//
-//  Created by David Hodgson on 03/02/2020.
-//  Copyright © 2020 David Hodgson. All rights reserved.
-//
-
 #include <Rcpp.h>
 #include <RcppEigen.h>
 #include <random>
@@ -11,21 +5,21 @@
 #include <boost/math/distributions.hpp>
 #include "ascent/Ascent.h"
 
+#define EIGEN_DONT_VECTORIZE
+#define EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT
+
 // [[Rcpp::depends(RcppEigen)]]
 // [[Rcpp::plugins("cpp14")]]
-
 using namespace Rcpp;
 using namespace std;
 using namespace Eigen;
 using namespace asc;
 
-typedef vector< double > num_vec;       //General-purpose numerical vector
-
+// stuff for random number generation
 std::random_device dev;
 std::mt19937 engine(dev());
 typedef boost::mt19937 PRNG_s;
-PRNG_s rng(engine()); //Generate non-static random numbers (pick different numbers from prior distribution each run)
-
+PRNG_s rng(engine());
 
 
 class EvaluateLogLikelihood
@@ -33,17 +27,22 @@ class EvaluateLogLikelihood
 public:
     // Need to be defined in constructor
     int A;
-    num_vec populationPerAgeGroup, eta, modelIncidencePerTime;
+    vector< double >  populationPerAgeGroup, eta, modelIncidencePerTime;
     double dailyBirthRate, totPopulation;
     double t_start, t_burn, t_end, dt;
-
+    NumericVector ageStratification;
+    
+    int dayNoAfterBurn,  weekNo;
+    double valueLogLikelihood;
+    
     // Defined later but of size A
-    NumericVector ageStratification, ep_t;
+    NumericVector ep_t;
     double currentODETime;
     bool loglikelihoodError;
+    bool ODESolverError;
+    
     
     EvaluateLogLikelihood(double dailyBirthRate_t, double totPopulation_t, NumericVector ageStratification_t): dailyBirthRate(dailyBirthRate_t), totPopulation(totPopulation_t), ageStratification(ageStratification_t){
-       
         A = ageStratification.size();
         eta.push_back(0);
         for (int i = 0; i < A-1; i++){
@@ -60,10 +59,15 @@ public:
         t_end = 52*7*8;
         dt = 1;
         currentODETime = 0;
+        dayNoAfterBurn = 0;
+        weekNo = 0;
+        valueLogLikelihood = 0;
+        
         loglikelihoodError = false;
+        ODESolverError = false;
     }
     
-    double evaluateLogLikelihoodCpp(VectorXd currentParamValues);
+    double evaluateLogLikelihoodCpp(const VectorXd& currentParamValues);
     
     // define in R after constructure
     NumericMatrix contactMatrix;
@@ -72,7 +76,8 @@ public:
     // Related to parameter values
     NumericVector parameterValuesTransformed;
     
-    void transformParameterValuesforODE(VectorXd currentParamValues){
+    void transformParameterValuesforODE(const VectorXd& currentParamValues){
+
 
         this->parameterValuesTransformed = NumericVector::create(
                                                                  _["ga0"] = 1.0/logisticTransform(currentParamValues(0), 2, 20),
@@ -94,13 +99,15 @@ public:
     }
     
     inline double logisticTransform(double x, double a, double b){
+
         if (x<-100){return a;}
         else if (x>100){return b;}
         else {return a + (b-a)*exp(x)/(exp(x) + 1);}
     }
     
-    num_vec generateInitialStates(){
-        num_vec initialStates;
+    vector< double >  generateInitialStates(){
+
+        vector< double >  initialStates;
         double a1, a2;
         double I1 = this->parameterValuesTransformed["I1"];
         double I2 = this->parameterValuesTransformed["I2"];
@@ -114,7 +121,7 @@ public:
                 a1 =  this->ageStratification(a); a2 = 90;
             }
             
-            num_vec propEachExposureGroup = initialProportionExposure(I3, a1, a2);
+            vector< double >  propEachExposureGroup = initialProportionExposure(I3, a1, a2);
             
             initialStates.push_back(this->populationPerAgeGroup[a]*propEachExposureGroup[0]*(1-I1*1.0)*(1-I2));
             initialStates.push_back(this->populationPerAgeGroup[a]*propEachExposureGroup[0]*I1*1.0);
@@ -128,14 +135,15 @@ public:
         return initialStates;
     }
     
-    num_vec initialProportionExposure(double l, double a1, double a2){
-        num_vec prop(this->A);
+    vector< double >  initialProportionExposure(double l, double a1, double a2){
+        vector< double >  prop(this->A);
         prop[0] = abs(poisson_cdf(l,a2,0)-poisson_cdf(l,a1,0))/((a2-a1)*l);
         prop[1] = 1 - prop[0];
         return prop;
     }
     
     double poisson_cdf(double l, double a, double x){
+
       if( l == 0.0 || a == 0.0){
         boost::math::poisson_distribution<> p(0.000001); return cdf(p,x);
       }
@@ -145,23 +153,32 @@ public:
     }
     
     double evaluateTimeStepLogLikelihood(int weekNo){
+
         double ll = 0;
         double estimatedLogBinomialCoeff;
         for (int a = 0; a < this->A; a++){
-           // NumericVector d = this->observedData[weekNo, a];
             double dataNewInfections = this->observedData(weekNo, a);
-            if (dataNewInfections > this->modelIncidencePerTime[a]){
-                return log(0);
-            }
             
-            estimatedLogBinomialCoeff = stirlingApproximation(this->modelIncidencePerTime[a]) - stirlingApproximation(dataNewInfections) - stirlingApproximation(this->modelIncidencePerTime[a]-dataNewInfections);
+            estimatedLogBinomialCoeff = calculateLogBinomial(this->modelIncidencePerTime[a], dataNewInfections);
             ll += estimatedLogBinomialCoeff + dataNewInfections*log(this->ep_t(a)) + (this->modelIncidencePerTime[a]-dataNewInfections)*log(1-this->ep_t(a));
-        }
-        if (std::isinf(ll)){
-          this->loglikelihoodError=true;
+            if (std::isinf(ll) || std::isnan(ll)){
+              this->loglikelihoodError=true;
+              return ll;
+            }
         }
         return ll;
     }
+    
+    long double calculateLogBinomial(double modelIncidence, double dataIncidence){
+        if (dataIncidence == 0)
+            return 0;
+        else if (dataIncidence > modelIncidence){
+            return log(0);
+        }
+        else{
+            return stirlingApproximation(modelIncidence) - stirlingApproximation(dataIncidence) - stirlingApproximation(modelIncidence-dataIncidence);
+        }
+    };
     
     long double stirlingApproximation(double n){
         if (n == 0)
@@ -172,22 +189,32 @@ public:
         }
     }
     
-    inline void checkStability(num_vec x)
+    inline void checkStability(vector< double >  x)
     {
-        long double X_w = 0;
-        // check state values are never negative
         for (int j = 0; j < this->A*7; j++){
-            if (x[j] < 0) {
-//Rcout << "Negative number at position: " << j << ". Value: " << x[j] << ". At time: " << this->currentODETime << endl;
-              this->loglikelihoodError=true; 
+            if (x[j] < 0 || std::isinf(x[j]) || std::isnan(x[j])) {
+              this->ODESolverError=true;
               return; }
-            else {X_w += x[j]; }
         }
-        // Check state values are non-infinte numeric values
-        if (std::isinf(X_w) || std::isnan(X_w)) {
-            this->loglikelihoodError=true;
-            return;
+    }
+    
+    void getWeeklyIncidence(vector<double> &x0 )
+    {
+        if (this->dayNoAfterBurn == 0){
+            for (int a = 0; a < this->A; a++)
+                x0[6 + 7*a] = 0.0; //Incidence at t_d = 0;
         }
+        if (this->dayNoAfterBurn%7 == 0 && this->dayNoAfterBurn > 0)
+        {
+            for (int a = 0; a < this->A; a++){
+                this->modelIncidencePerTime[a] = x0[6 + 7*a]; //Incidence at t_d = 7;
+                x0[6 + 7*a] = 0.0;
+            }
+            this->valueLogLikelihood += this->evaluateTimeStepLogLikelihood(this->weekNo);
+            if (this->loglikelihoodError){return;}
+            this->weekNo ++;
+        }
+        this->dayNoAfterBurn++;
     }
 };
 
@@ -201,7 +228,7 @@ public:
   double dailyBirthRate;
   NumericMatrix contactMatrix;
   int A;
-  num_vec populationPerAgeGroup, eta;
+  vector< double >  populationPerAgeGroup, eta;
   
   ODE_desc(EvaluateLogLikelihood* finELL_t): finELL(finELL_t){
     
@@ -220,9 +247,11 @@ public:
     contactMatrix = finELL->contactMatrix;
     dailyBirthRate = finELL->dailyBirthRate;
    };
+    
+   // ~ODE_desc(){}
   
   
-  void operator() (  num_vec &x , num_vec &dxdt , const double  t )
+  void operator() (  vector< double >  &x , vector< double >  &dxdt , const double  t )
   {
     int t_d = (int)t%365;
     beta = a + (b-a)*exp(-(t_d-phi)*(t_d-phi)/(2*psi*psi));
@@ -262,49 +291,36 @@ public:
   }
 };
 
-double EvaluateLogLikelihood::evaluateLogLikelihoodCpp(VectorXd currentParamValues)
+double EvaluateLogLikelihood::evaluateLogLikelihoodCpp(const VectorXd& currentParamValues)
 {
-  transformParameterValuesforODE(currentParamValues);
+  // Restart values
+  this->currentODETime = this->t_start;
   this->loglikelihoodError = false;
-  
+  this->ODESolverError = false;
+  this->dayNoAfterBurn = 0;
+  this->weekNo = 0;
+  this->valueLogLikelihood = 0;
+  transformParameterValuesforODE(currentParamValues);
+
+  // Set up and Run ODE solver
   EulerT<state_t> integrator;
   SystemT<state_t, system_t> System;
   asc::Recorder recorder;
-
-  num_vec x0 = generateInitialStates();
+  vector< double >  x0 = generateInitialStates();
   ODE_desc ODE_desc_inst(this);
-  this->currentODETime = this->t_start;
-  int dayNoAfterBurn = 0;
-  int weekNo = 0;
-  double valueLogLikelihood = 0;
-
+  
   while (this->currentODETime < this->t_end){
     integrator(ODE_desc_inst, x0, this->currentODETime, this->dt);
+      
     checkStability(x0);
-    if (this->loglikelihoodError){
-      return log(0);
-    }
+      if (this->ODESolverError){
+return log(0);}
     
-    if (this->currentODETime > this->t_burn)
-    {
-      if (dayNoAfterBurn == 0){
-        for (int a = 0; a < this->A; a++)
-          x0[6 + 7*a] = 0.0; //Incidence at t_d = 0;
-      }
-      if (dayNoAfterBurn%7 == 0 && dayNoAfterBurn > 0)
-      {
-        for (int a = 0; a < this->A; a++){
-          this->modelIncidencePerTime[a] = x0[6 + 7*a]; //Incidence at t_d = 7;
-          x0[6 + 7*a] = 0.0;
-        }
-        valueLogLikelihood += evaluateTimeStepLogLikelihood(weekNo);
-        if (this->loglikelihoodError){
-          return log(0);
-        }
-        weekNo ++;
-      }
-      dayNoAfterBurn++;
+    if (this->currentODETime > this->t_burn){
+      getWeeklyIncidence(x0);
+        if (this->loglikelihoodError){  ;
+return log(0);}
     }
   }
-  return valueLogLikelihood; // RETURN THE LOG LIKELIHOOD
+  return this->valueLogLikelihood; // RETURN THE LOG LIKELIHOOD
 }
